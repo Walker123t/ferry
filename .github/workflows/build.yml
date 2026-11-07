@@ -131,7 +131,8 @@ jobs:
           else
             AUTH=(--apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$TEAM_ID")
           fi
-          xcrun notarytool submit build/Ferry.dmg "${AUTH[@]}" --wait --timeout 30m --output-format json | tee "$RUNNER_TEMP/notary.json"
+          xcrun notarytool submit build/Ferry.dmg "${AUTH[@]}" --wait --timeout 30m --output-format json > "$RUNNER_TEMP/notary.json" || true
+          cat "$RUNNER_TEMP/notary.json"
           rm -f "$RUNNER_TEMP/notary.p8"
           if ! grep -q '"status" *: *"Accepted"' "$RUNNER_TEMP/notary.json"; then
             ID=$(sed -nE 's/.*"id" *: *"([^"]+)".*/\1/p' "$RUNNER_TEMP/notary.json" | head -1)
