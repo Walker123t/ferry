@@ -128,7 +128,17 @@ jobs:
         run: |
           set -euo pipefail
           if [ -n "$KEY_P8" ]; then
-            echo "$KEY_P8" > "$RUNNER_TEMP/notary.p8"
+            # Accept the .p8 however it was pasted: whole file, body only, one line, or base64 of the file.
+            RAW=$(printf '%s' "$KEY_P8" | tr -d '\r')
+            if ! grep -q "PRIVATE KEY" <<<"$RAW"; then
+              DECODED=$(printf '%s' "$RAW" | tr -d ' \n' | base64 --decode 2>/dev/null || true)
+              if grep -q "PRIVATE KEY" <<<"$DECODED"; then RAW="$DECODED"; fi
+            fi
+            BODY=$(printf '%s' "$RAW" | sed -E 's/-----(BEGIN|END) [A-Z ]*PRIVATE KEY-----//g' | tr -d ' \n\t')
+            { echo "-----BEGIN PRIVATE KEY-----"; fold -w 64 <<<"$BODY"; echo "-----END PRIVATE KEY-----"; } > "$RUNNER_TEMP/notary.p8"
+            echo "Key: $(wc -l < "$RUNNER_TEMP/notary.p8") lines, body ${#BODY} chars"
+            KEY_ID=$(printf '%s' "$KEY_ID" | tr -d ' \r\n')
+            ISSUER_ID=$(printf '%s' "$ISSUER_ID" | tr -d ' \r\n')
             AUTH=(--key "$RUNNER_TEMP/notary.p8" --key-id "$KEY_ID" --issuer "$ISSUER_ID")
           else
             AUTH=(--apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$TEAM_ID")
