@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Walker123t/ferry/releases/latest/download/Ferry.zip"><b>⬇︎ Download Ferry</b></a>
+  <a href="https://github.com/Walker123t/ferry/releases/latest/download/Ferry.dmg"><b>⬇︎ Download Ferry</b></a>
   &nbsp;·&nbsp;
   <a href="https://walker123t.github.io/ferry/">Website</a>
   &nbsp;·&nbsp;
@@ -48,15 +48,16 @@ Ferry is a small, native SwiftUI app that does one job well.
 
 ## Install
 
-1. [Download **Ferry.zip**](https://github.com/Walker123t/ferry/releases/latest/download/Ferry.zip), unzip it, and drag **Ferry** to **Applications**.
-2. Ferry isn't notarized by Apple yet, so macOS blocks it the first time. Open **System Settings → Privacy & Security**,
-   scroll down, and click **Open Anyway**. Or run this in Terminal:
-   ```sh
-   xattr -dr com.apple.quarantine /Applications/Ferry.app
-   ```
-3. Plug in your phone, unlock it, tap the **USB** notification and choose **File transfer**.
+**Download:** grab [**Ferry.dmg**](https://github.com/Walker123t/ferry/releases/latest/download/Ferry.dmg), open it, and drag Ferry to Applications.
 
-Requires a Mac with Apple silicon running macOS 14 Sonoma or later.
+**Homebrew:**
+```sh
+brew install --cask walker123t/tap/ferry
+```
+
+Then plug in your phone, unlock it, tap the **USB** notification and choose **File transfer**.
+
+Ferry is signed with a Developer ID and notarized by Apple. It requires a Mac with Apple silicon running macOS 14 Sonoma or later.
 
 ## Using Ferry
 
@@ -89,7 +90,8 @@ The script installs `libmtp` with Homebrew the first time, compiles with Swift P
 creates `build/Ferry.app` and opens it. You can also just double-click **Build and Run.command** in Finder.
 
 Every push is built by [GitHub Actions](.github/workflows/build.yml). Tagged releases (`v*`) bundle
-libmtp and libusb into the app and publish `Ferry.zip` to [Releases](https://github.com/Walker123t/ferry/releases).
+libmtp and libusb into the app, sign and notarize it, publish `Ferry.dmg` to
+[Releases](https://github.com/Walker123t/ferry/releases), and update the Homebrew tap.
 
 ### How it works
 

@@ -12,36 +12,39 @@ permissions:
 
 jobs:
   build:
-    name: Build Ferry.app
+    name: Build Ferry
     # macOS 14 runner so the bundled Homebrew libraries work on macOS 14 and later.
     runs-on: macos-14
+    env:
+      APP: build/Ferry.app
+      HAS_SIGNING: ${{ secrets.MACOS_CERTIFICATE_P12 != '' }}
+      HAS_NOTARY: ${{ secrets.NOTARY_KEY_P8 != '' }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install libmtp
+      - name: Install tools
         run: |
           brew update --quiet
-          brew install libmtp pkgconf dylibbundler
+          brew install libmtp pkgconf dylibbundler create-dmg
 
       - name: Show toolchain
         run: |
           sw_vers
           swift --version
           pkg-config --modversion libmtp
+          echo "Signing: $HAS_SIGNING  Notarizing: $HAS_NOTARY"
 
       - name: Compile
         run: swift build -c release --arch arm64
 
-      - name: Package Ferry.app
+      - name: Assemble Ferry.app
         run: |
           set -euo pipefail
-          APP="build/Ferry.app"
           rm -rf build && mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Frameworks"
           cp "$(swift build -c release --arch arm64 --show-bin-path)/Ferry" "$APP/Contents/MacOS/Ferry"
           cp Resources/Info.plist "$APP/Contents/Info.plist"
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-            VERSION="${GITHUB_REF_NAME#v}"
-            /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$APP/Contents/Info.plist"
+            /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${GITHUB_REF_NAME#v}" "$APP/Contents/Info.plist"
           fi
           /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $GITHUB_RUN_NUMBER" "$APP/Contents/Info.plist"
           iconutil -c icns Resources/AppIcon.iconset -o "$APP/Contents/Resources/AppIcon.icns"
@@ -51,33 +54,123 @@ jobs:
             -x "$APP/Contents/MacOS/Ferry" \
             -d "$APP/Contents/Frameworks/" \
             -p @executable_path/../Frameworks/
-          echo "Bundled libraries:"; ls "$APP/Contents/Frameworks"
-          otool -L "$APP/Contents/MacOS/Ferry"
-          if otool -L "$APP/Contents/MacOS/Ferry" | grep -q /opt/homebrew; then
-            echo "::error::Ferry still links against Homebrew paths"; exit 1
+          echo "Bundled:"; ls "$APP/Contents/Frameworks"
+          if otool -L "$APP/Contents/MacOS/Ferry" "$APP"/Contents/Frameworks/*.dylib | grep -q /opt/homebrew; then
+            echo "::error::Something still links against Homebrew paths"; exit 1
           fi
 
-          codesign --force --deep --sign - "$APP"
-          codesign --verify --deep --strict "$APP"
-          ditto -c -k --sequesterRsrc --keepParent "$APP" build/Ferry.zip
+      - name: Import Developer ID certificate
+        if: env.HAS_SIGNING == 'true'
+        env:
+          P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+          P12_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          KEYCHAIN="$RUNNER_TEMP/signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(uuidgen)"
+          echo "$P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security import "$RUNNER_TEMP/cert.p12" -P "$P12_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN"
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" >/dev/null
+          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
+          rm "$RUNNER_TEMP/cert.p12"
+          IDENTITY=$(security find-identity -v -p codesigning "$KEYCHAIN" | grep "Developer ID Application" | head -1 | sed -E 's/.*"(.*)"/\1/')
+          [ -n "$IDENTITY" ] || { echo "::error::No Developer ID Application identity in the certificate"; exit 1; }
+          echo "Signing as: $IDENTITY"
+          echo "SIGN_IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
+
+      - name: Sign
+        run: |
+          set -euo pipefail
+          if [ -n "${SIGN_IDENTITY:-}" ]; then
+            # Developer ID + hardened runtime: required for notarization.
+            for lib in "$APP"/Contents/Frameworks/*.dylib; do
+              codesign --force --timestamp --options runtime --sign "$SIGN_IDENTITY" "$lib"
+            done
+            codesign --force --timestamp --options runtime --sign "$SIGN_IDENTITY" "$APP"
+          else
+            echo "::warning::No signing certificate configured; building an ad-hoc signed app."
+            codesign --force --deep --sign - "$APP"
+          fi
+          codesign --verify --deep --strict --verbose=2 "$APP"
+
+      - name: Create DMG
+        run: |
+          set -euo pipefail
+          mkdir -p build/dmg && cp -R "$APP" build/dmg/
+          create-dmg \
+            --volname "Ferry" \
+            --volicon "$APP/Contents/Resources/AppIcon.icns" \
+            --window-pos 200 120 --window-size 560 340 \
+            --icon-size 112 --icon "Ferry.app" 150 160 \
+            --hide-extension "Ferry.app" \
+            --app-drop-link 410 160 \
+            --no-internet-enable \
+            build/Ferry.dmg build/dmg/ || test -f build/Ferry.dmg
+          if [ -n "${SIGN_IDENTITY:-}" ]; then
+            codesign --force --timestamp --sign "$SIGN_IDENTITY" build/Ferry.dmg
+          fi
+
+      - name: Notarize
+        if: env.HAS_SIGNING == 'true' && env.HAS_NOTARY == 'true'
+        env:
+          KEY_P8: ${{ secrets.NOTARY_KEY_P8 }}
+          KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
+          ISSUER_ID: ${{ secrets.NOTARY_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          echo "$KEY_P8" > "$RUNNER_TEMP/notary.p8"
+          xcrun notarytool submit build/Ferry.dmg \
+            --key "$RUNNER_TEMP/notary.p8" --key-id "$KEY_ID" --issuer "$ISSUER_ID" \
+            --wait --timeout 30m
+          rm "$RUNNER_TEMP/notary.p8"
+          xcrun stapler staple build/Ferry.dmg
+          xcrun stapler staple "$APP"
+          spctl --assess --type open --context context:primary-signature -v build/Ferry.dmg
+          spctl --assess --type execute -v "$APP"
+
+      - name: Zip app
+        run: ditto -c -k --sequesterRsrc --keepParent "$APP" build/Ferry.zip
 
       - name: Upload build
         uses: actions/upload-artifact@v4
         with:
           name: Ferry
-          path: build/Ferry.zip
+          path: |
+            build/Ferry.dmg
+            build/Ferry.zip
 
       - name: Publish release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: build/Ferry.zip
+          files: |
+            build/Ferry.dmg
+            build/Ferry.zip
           generate_release_notes: true
           body: |
-            **Download `Ferry.zip`, unzip it, and drag Ferry to Applications.**
-
-            Ferry isn't notarized by Apple yet, so the first time you open it macOS will block it.
-            Go to **System Settings → Privacy & Security**, scroll down, and click **Open Anyway**.
-            (Or run `xattr -dr com.apple.quarantine /Applications/Ferry.app` in Terminal.)
+            **Download `Ferry.dmg`, open it, and drag Ferry to Applications.**
 
             Requires a Mac with Apple silicon running macOS 14 Sonoma or later.
+            Or install with Homebrew: `brew install --cask walker123t/tap/ferry`
+
+      - name: Update Homebrew tap
+        if: startsWith(github.ref, 'refs/tags/v') && env.HAS_SIGNING == 'true'
+        env:
+          TAP_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "$TAP_TOKEN" ]; then echo "::notice::TAP_GITHUB_TOKEN not set; skipping tap update."; exit 0; fi
+          VERSION="${GITHUB_REF_NAME#v}"
+          SHA=$(shasum -a 256 build/Ferry.dmg | cut -d' ' -f1)
+          git clone "https://x-access-token:${TAP_TOKEN}@github.com/Walker123t/homebrew-tap.git" tap
+          mkdir -p tap/Casks
+          sed -e "s/__VERSION__/$VERSION/" -e "s/__SHA256__/$SHA/" packaging/ferry.rb.template > tap/Casks/ferry.rb
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Casks/ferry.rb
+          git commit -m "ferry $VERSION" || exit 0
+          git push

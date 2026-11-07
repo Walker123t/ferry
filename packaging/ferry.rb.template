@@ -1,0 +1,24 @@
+cask "ferry" do
+  version "__VERSION__"
+  sha256 "__SHA256__"
+
+  url "https://github.com/Walker123t/ferry/releases/download/v#{version}/Ferry.dmg"
+  name "Ferry"
+  desc "Native Android file transfer (MTP) app"
+  homepage "https://walker123t.github.io/ferry/"
+
+  livecheck do
+    url :url
+    strategy :github_latest
+  end
+
+  depends_on arch: :arm64
+  depends_on macos: ">= :sonoma"
+
+  app "Ferry.app"
+
+  zap trash: [
+    "~/Library/Preferences/app.ferry.mac.plist",
+    "~/Library/Saved Application State/app.ferry.mac.savedState",
+  ]
+end
