@@ -1,0 +1,83 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build Ferry.app
+    # macOS 14 runner so the bundled Homebrew libraries work on macOS 14 and later.
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install libmtp
+        run: |
+          brew update --quiet
+          brew install libmtp pkgconf dylibbundler
+
+      - name: Show toolchain
+        run: |
+          sw_vers
+          swift --version
+          pkg-config --modversion libmtp
+
+      - name: Compile
+        run: swift build -c release --arch arm64
+
+      - name: Package Ferry.app
+        run: |
+          set -euo pipefail
+          APP="build/Ferry.app"
+          rm -rf build && mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Frameworks"
+          cp "$(swift build -c release --arch arm64 --show-bin-path)/Ferry" "$APP/Contents/MacOS/Ferry"
+          cp Resources/Info.plist "$APP/Contents/Info.plist"
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+            /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$APP/Contents/Info.plist"
+          fi
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $GITHUB_RUN_NUMBER" "$APP/Contents/Info.plist"
+          iconutil -c icns Resources/AppIcon.iconset -o "$APP/Contents/Resources/AppIcon.icns"
+
+          # Copy libmtp, libusb and friends into the app so it runs without Homebrew.
+          dylibbundler -od -b \
+            -x "$APP/Contents/MacOS/Ferry" \
+            -d "$APP/Contents/Frameworks/" \
+            -p @executable_path/../Frameworks/
+          echo "Bundled libraries:"; ls "$APP/Contents/Frameworks"
+          otool -L "$APP/Contents/MacOS/Ferry"
+          if otool -L "$APP/Contents/MacOS/Ferry" | grep -q /opt/homebrew; then
+            echo "::error::Ferry still links against Homebrew paths"; exit 1
+          fi
+
+          codesign --force --deep --sign - "$APP"
+          codesign --verify --deep --strict "$APP"
+          ditto -c -k --sequesterRsrc --keepParent "$APP" build/Ferry.zip
+
+      - name: Upload build
+        uses: actions/upload-artifact@v4
+        with:
+          name: Ferry
+          path: build/Ferry.zip
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: build/Ferry.zip
+          generate_release_notes: true
+          body: |
+            **Download `Ferry.zip`, unzip it, and drag Ferry to Applications.**
+
+            Ferry isn't notarized by Apple yet, so the first time you open it macOS will block it.
+            Go to **System Settings → Privacy & Security**, scroll down, and click **Open Anyway**.
+            (Or run `xattr -dr com.apple.quarantine /Applications/Ferry.app` in Terminal.)
+
+            Requires a Mac with Apple silicon running macOS 14 Sonoma or later.
