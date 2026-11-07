@@ -18,7 +18,8 @@ jobs:
     env:
       APP: build/Ferry.app
       HAS_SIGNING: ${{ secrets.MACOS_CERTIFICATE_P12 != '' }}
-      HAS_NOTARY: ${{ secrets.NOTARY_KEY_P8 != '' }}
+      # Notarize with either an App Store Connect API key or an Apple ID + app-specific password.
+      HAS_NOTARY: ${{ secrets.NOTARY_KEY_P8 != '' || secrets.NOTARY_APPLE_ID != '' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -119,13 +120,24 @@ jobs:
           KEY_P8: ${{ secrets.NOTARY_KEY_P8 }}
           KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
           ISSUER_ID: ${{ secrets.NOTARY_ISSUER_ID }}
+          APPLE_ID: ${{ secrets.NOTARY_APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.NOTARY_PASSWORD }}
+          TEAM_ID: ${{ secrets.NOTARY_TEAM_ID }}
         run: |
           set -euo pipefail
-          echo "$KEY_P8" > "$RUNNER_TEMP/notary.p8"
-          xcrun notarytool submit build/Ferry.dmg \
-            --key "$RUNNER_TEMP/notary.p8" --key-id "$KEY_ID" --issuer "$ISSUER_ID" \
-            --wait --timeout 30m
-          rm "$RUNNER_TEMP/notary.p8"
+          if [ -n "$KEY_P8" ]; then
+            echo "$KEY_P8" > "$RUNNER_TEMP/notary.p8"
+            AUTH=(--key "$RUNNER_TEMP/notary.p8" --key-id "$KEY_ID" --issuer "$ISSUER_ID")
+          else
+            AUTH=(--apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$TEAM_ID")
+          fi
+          xcrun notarytool submit build/Ferry.dmg "${AUTH[@]}" --wait --timeout 30m --output-format json | tee "$RUNNER_TEMP/notary.json"
+          rm -f "$RUNNER_TEMP/notary.p8"
+          if ! grep -q '"status" *: *"Accepted"' "$RUNNER_TEMP/notary.json"; then
+            ID=$(sed -nE 's/.*"id" *: *"([^"]+)".*/\1/p' "$RUNNER_TEMP/notary.json" | head -1)
+            [ -n "$ID" ] && xcrun notarytool log "$ID" "${AUTH[@]}" || true
+            echo "::error::Notarization was not accepted"; exit 1
+          fi
           xcrun stapler staple build/Ferry.dmg
           xcrun stapler staple "$APP"
           spctl --assess --type open --context context:primary-signature -v build/Ferry.dmg
