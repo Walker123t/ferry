@@ -19,7 +19,7 @@
 
 <p align="center">
   <a href="https://github.com/Walker123t/ferry/actions/workflows/build.yml"><img src="https://github.com/Walker123t/ferry/actions/workflows/build.yml/badge.svg" alt="Build status"></a>
-  <img src="https://img.shields.io/badge/macOS-14%2B-blue" alt="macOS 14+">
+  <img src="https://img.shields.io/badge/macOS-15%2B-blue" alt="macOS 15+">
   <img src="https://img.shields.io/badge/Apple%20silicon-native-green" alt="Apple silicon">
   <img src="https://img.shields.io/badge/license-MIT-lightgrey" alt="MIT license">
 </p>
@@ -57,7 +57,7 @@ brew install --cask walker123t/tap/ferry
 
 Then plug in your phone, unlock it, tap the **USB** notification and choose **File transfer**.
 
-Ferry is signed with a Developer ID and notarized by Apple. It requires a Mac with Apple silicon running macOS 14 Sonoma or later.
+Ferry is signed with a Developer ID and notarized by Apple. It requires a Mac with Apple silicon running macOS 15 Sequoia or later.
 
 ## Using Ferry
 

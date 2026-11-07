@@ -13,8 +13,8 @@ permissions:
 jobs:
   build:
     name: Build Ferry
-    # macOS 14 runner so the bundled Homebrew libraries work on macOS 14 and later.
-    runs-on: macos-14
+    # Bundled Homebrew libraries are built for the runner OS, so this sets the minimum macOS (15).
+    runs-on: macos-15
     env:
       APP: build/Ferry.app
       HAS_SIGNING: ${{ secrets.MACOS_CERTIFICATE_P12 != '' }}
@@ -153,7 +153,7 @@ jobs:
           body: |
             **Download `Ferry.dmg`, open it, and drag Ferry to Applications.**
 
-            Requires a Mac with Apple silicon running macOS 14 Sonoma or later.
+            Requires a Mac with Apple silicon running macOS 15 Sequoia or later.
             Or install with Homebrew: `brew install --cask walker123t/tap/ferry`
 
       - name: Update Homebrew tap
