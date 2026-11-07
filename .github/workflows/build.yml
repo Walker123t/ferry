@@ -8,6 +8,11 @@ on:
   release:
     types: [published]
   workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version to publish, e.g. 0.1.0 (leave empty for a test build)"
+        required: false
+        default: ""
 
 permissions:
   contents: write
@@ -19,6 +24,8 @@ jobs:
     runs-on: macos-15
     env:
       APP: build/Ferry.app
+      # Set when publishing: from a v* tag, a published release, or the manual "version" input.
+      RAW_VERSION: ${{ inputs.version || (startsWith(github.ref, 'refs/tags/v') && github.ref_name) || '' }}
       HAS_SIGNING: ${{ secrets.MACOS_CERTIFICATE_P12 != '' }}
       # Notarize with either an App Store Connect API key or an Apple ID + app-specific password.
       HAS_NOTARY: ${{ secrets.NOTARY_KEY_P8 != '' || secrets.NOTARY_APPLE_ID != '' }}
@@ -29,6 +36,17 @@ jobs:
         run: |
           brew update --quiet
           brew install libmtp pkgconf dylibbundler create-dmg
+
+      - name: Work out version
+        run: |
+          V="${RAW_VERSION#v}"
+          if [ -n "$V" ]; then
+            [[ "$V" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::Version must look like 1.2.3"; exit 1; }
+            echo "VERSION=$V" >> "$GITHUB_ENV"
+            echo "Publishing version $V"
+          else
+            echo "Test build (no release)"
+          fi
 
       - name: Show toolchain
         run: |
@@ -46,8 +64,8 @@ jobs:
           rm -rf build && mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Frameworks"
           cp "$(swift build -c release --arch arm64 --show-bin-path)/Ferry" "$APP/Contents/MacOS/Ferry"
           cp Resources/Info.plist "$APP/Contents/Info.plist"
-          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-            /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${GITHUB_REF_NAME#v}" "$APP/Contents/Info.plist"
+          if [ -n "${VERSION:-}" ]; then
+            /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$APP/Contents/Info.plist"
           fi
           /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $GITHUB_RUN_NUMBER" "$APP/Contents/Info.plist"
           iconutil -c icns Resources/AppIcon.iconset -o "$APP/Contents/Resources/AppIcon.icns"
@@ -168,9 +186,12 @@ jobs:
             build/Ferry.zip
 
       - name: Publish release
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: env.VERSION != ''
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: v${{ env.VERSION }}
+          name: Ferry ${{ env.VERSION }}
+          target_commitish: ${{ github.sha }}
           files: |
             build/Ferry.dmg
             build/Ferry.zip
@@ -182,13 +203,12 @@ jobs:
             Or install with Homebrew: `brew install --cask walker123t/tap/ferry`
 
       - name: Update Homebrew tap
-        if: startsWith(github.ref, 'refs/tags/v') && env.HAS_SIGNING == 'true'
+        if: env.VERSION != '' && env.HAS_SIGNING == 'true'
         env:
           TAP_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           if [ -z "$TAP_TOKEN" ]; then echo "::notice::TAP_GITHUB_TOKEN not set; skipping tap update."; exit 0; fi
-          VERSION="${GITHUB_REF_NAME#v}"
           SHA=$(shasum -a 256 build/Ferry.dmg | cut -d' ' -f1)
           git clone "https://x-access-token:${TAP_TOKEN}@github.com/Walker123t/homebrew-tap.git" tap
           mkdir -p tap/Casks
